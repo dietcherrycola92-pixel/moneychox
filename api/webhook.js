@@ -11,9 +11,23 @@ const RATE_PER_GROUP_RESPECT  = 1;
 const RATE_PER_GROUP_POSITIVE = 1;
 
 async function fetchDecoded(url) {
-  const r = await fetch(url, { cache: 'no-store' });
-  const buf = await r.arrayBuffer();
-  return iconv.decode(Buffer.from(buf), 'win1251');
+  try {
+    const r = await fetch(url, {
+      cache: 'no-store',
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml'
+      }
+    });
+    if (!r.ok) {
+      throw new Error(`HTTP ${r.status} for ${url}`);
+    }
+    const buf = await r.arrayBuffer();
+    return iconv.decode(Buffer.from(buf), 'win1251');
+  } catch (e) {
+    throw new Error(`fetchDecoded failed for ${url}: ${e.message}`);
+  }
 }
 
 async function getPostCount(uid) {
@@ -36,7 +50,6 @@ function creditFromMilestone(current, milestone, ratePerGroup) {
 }
 
 module.exports = async (req, res) => {
-  // --- CORS: разрешаем запросы с любого домена (форум будет стучаться отсюда) ---
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -63,11 +76,25 @@ module.exports = async (req, res) => {
 
   const uid = Number(user_id);
 
-  const [posts, respect, positive] = await Promise.all([
-    getPostCount(uid),
-    getBracketNumber(`${FORUM_BASE}/respect.php?id=${uid}`),
-    getBracketNumber(`${FORUM_BASE}/positive.php?id=${uid}`)
-  ]);
+  let posts, respect, positive;
+  try {
+    posts = await getPostCount(uid);
+  } catch (e) {
+    res.status(500).json({ error: 'posts fetch failed', detail: e.message });
+    return;
+  }
+  try {
+    respect = await getBracketNumber(`${FORUM_BASE}/respect.php?id=${uid}`);
+  } catch (e) {
+    res.status(500).json({ error: 'respect fetch failed', detail: e.message });
+    return;
+  }
+  try {
+    positive = await getBracketNumber(`${FORUM_BASE}/positive.php?id=${uid}`);
+  } catch (e) {
+    res.status(500).json({ error: 'positive fetch failed', detail: e.message });
+    return;
+  }
 
   let { data: row } = await supabase
     .from('users')
