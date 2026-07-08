@@ -116,6 +116,12 @@ module.exports = async (req, res) => {
 
   } catch (e) {
     console.error('FATAL ERROR:', e && e.stack ? e.stack : e);
-    res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 5) });
+    res.status(500).json({
+      error: e.message,
+      stack: (e.stack || '').split('\n').slice(0, 5),
+      debug_supabase_url_preview: (process.env.SUPABASE_URL || 'EMPTY').slice(0, 40),
+      debug_supabase_url_length: (process.env.SUPABASE_URL || '').length,
+      debug_key_length: (process.env.SUPABASE_KEY || '').length
+    });
   }
 };
