@@ -2,7 +2,6 @@
   "name": "moneychox",
   "version": "1.0.0",
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.0",
     "iconv-lite": "^0.6.3"
   }
 }
