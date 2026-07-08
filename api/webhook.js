@@ -2,13 +2,11 @@ const { createClient } = require('@supabase/supabase-js');
 const iconv = require('iconv-lite');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-const FORUM_BASE = process.env.FORUM_BASE_URL; // напр. https://noctratest.rusff.me
+const FORUM_BASE = process.env.FORUM_BASE_URL;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
-// ТЕСТОВЫЙ РЕЖИМ: платим за каждую единицу, чтобы проверить всю цепочку.
-// Когда всё заработает — поменяй GROUP_SIZE на 100 и RATE обратно на 50.
-const GROUP_SIZE = 1;              // <-- в проде будет 100
-const RATE_PER_GROUP_POSTS    = 1; // <-- в проде будет 50
+const GROUP_SIZE = 1;
+const RATE_PER_GROUP_POSTS    = 1;
 const RATE_PER_GROUP_RESPECT  = 1;
 const RATE_PER_GROUP_POSITIVE = 1;
 
@@ -38,6 +36,16 @@ function creditFromMilestone(current, milestone, ratePerGroup) {
 }
 
 module.exports = async (req, res) => {
+  // --- CORS: разрешаем запросы с любого домена (форум будет стучаться отсюда) ---
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'method not allowed' });
     return;
