@@ -120,6 +120,8 @@ module.exports = async (req, res) => {
     console.error('FATAL ERROR:', e && e.stack ? e.stack : e);
     res.status(500).json({
       error: e.message,
+      cause: e.cause ? String(e.cause) : null,
+      cause_code: e.cause && e.cause.code ? e.cause.code : null,
       stack: (e.stack || '').split('\n').slice(0, 5)
     });
   }
