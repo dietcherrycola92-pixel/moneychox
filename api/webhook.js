@@ -1,7 +1,7 @@
-const { createClient } = require('@supabase/supabase-js');
 const iconv = require('iconv-lite');
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const FORUM_BASE = process.env.FORUM_BASE_URL;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
@@ -41,6 +41,38 @@ function creditFromMilestone(current, milestone, ratePerGroup) {
   return { newMilestone: milestone + steps * GROUP_SIZE, add: steps * ratePerGroup };
 }
 
+// --- прямые REST-вызовы к Supabase, без библиотеки supabase-js ---
+async function sbSelect(uid) {
+  const url = `${SUPABASE_URL}/rest/v1/users?profile_id=eq.${uid}&select=*`;
+  const r = await fetch(url, {
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`
+    }
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error(`Supabase select HTTP ${r.status}: ${text}`);
+  const arr = JSON.parse(text);
+  return arr[0] || null;
+}
+
+async function sbUpsert(row) {
+  const url = `${SUPABASE_URL}/rest/v1/users`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates'
+    },
+    body: JSON.stringify(row)
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error(`Supabase upsert HTTP ${r.status}: ${text}`);
+  return text;
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -55,32 +87,12 @@ module.exports = async (req, res) => {
     if (!user_id) { res.status(400).json({ error: 'user_id required' }); return; }
 
     const uid = Number(user_id);
-    console.log('STEP: fetching forum data for uid', uid);
 
     const posts = await getPostCount(uid);
-    console.log('STEP: posts =', posts);
-
     const respect = await getBracketNumber(`${FORUM_BASE}/respect.php?id=${uid}`);
-    console.log('STEP: respect =', respect);
-
     const positive = await getBracketNumber(`${FORUM_BASE}/positive.php?id=${uid}`);
-    console.log('STEP: positive =', positive);
 
-    console.log('STEP: querying supabase, url present?', !!process.env.SUPABASE_URL, 'key present?', !!process.env.SUPABASE_KEY);
-
-    const selectResult = await supabase
-      .from('users')
-      .select('*')
-      .eq('profile_id', uid)
-      .maybeSingle();
-
-    console.log('STEP: supabase select result', JSON.stringify(selectResult));
-
-    if (selectResult.error) {
-      throw new Error('Supabase select error: ' + JSON.stringify(selectResult.error));
-    }
-
-    let row = selectResult.data;
+    let row = await sbSelect(uid);
     if (!row) {
       row = { profile_id: uid, money: 0, posts_milestone: 0, respect_milestone: 0, positive_milestone: 0, ads_milestone: 0, game_milestone: 0 };
     }
@@ -92,25 +104,15 @@ module.exports = async (req, res) => {
     const totalAdd = postsResult.add + respectResult.add + positiveResult.add;
     const newMoney = (row.money || 0) + totalAdd;
 
-    console.log('STEP: about to upsert', { uid, newMoney, totalAdd });
-
-    const upsertResult = await supabase
-      .from('users')
-      .upsert({
-        profile_id: uid,
-        money: newMoney,
-        posts_milestone: postsResult.newMilestone,
-        respect_milestone: respectResult.newMilestone,
-        positive_milestone: positiveResult.newMilestone,
-        ads_milestone: row.ads_milestone || 0,
-        game_milestone: row.game_milestone || 0
-      });
-
-    console.log('STEP: upsert result', JSON.stringify(upsertResult));
-
-    if (upsertResult.error) {
-      throw new Error('Supabase upsert error: ' + JSON.stringify(upsertResult.error));
-    }
+    await sbUpsert({
+      profile_id: uid,
+      money: newMoney,
+      posts_milestone: postsResult.newMilestone,
+      respect_milestone: respectResult.newMilestone,
+      positive_milestone: positiveResult.newMilestone,
+      ads_milestone: row.ads_milestone || 0,
+      game_milestone: row.game_milestone || 0
+    });
 
     res.status(200).json({ ok: true, posts, respect, positive, added: totalAdd, money: newMoney });
 
@@ -118,10 +120,7 @@ module.exports = async (req, res) => {
     console.error('FATAL ERROR:', e && e.stack ? e.stack : e);
     res.status(500).json({
       error: e.message,
-      stack: (e.stack || '').split('\n').slice(0, 5),
-      debug_supabase_url_preview: (process.env.SUPABASE_URL || 'EMPTY').slice(0, 40),
-      debug_supabase_url_length: (process.env.SUPABASE_URL || '').length,
-      debug_key_length: (process.env.SUPABASE_KEY || '').length
+      stack: (e.stack || '').split('\n').slice(0, 5)
     });
   }
 };
