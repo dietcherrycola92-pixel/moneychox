@@ -1,0 +1,112 @@
+const { createClient } = require('@supabase/supabase-js');
+const iconv = require('iconv-lite');
+
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const FORUM_BASE = process.env.FORUM_BASE_URL; // напр. https://noctratest.rusff.me
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+
+// ТЕСТОВЫЙ РЕЖИМ: платим за каждую единицу, чтобы проверить всю цепочку.
+// Когда всё заработает — поменяй GROUP_SIZE на 100 и RATE обратно на 50.
+const GROUP_SIZE = 1;              // <-- в проде будет 100
+const RATE_PER_GROUP_POSTS    = 1; // <-- в проде будет 50
+const RATE_PER_GROUP_RESPECT  = 1;
+const RATE_PER_GROUP_POSITIVE = 1;
+
+async function fetchDecoded(url) {
+  const r = await fetch(url, { cache: 'no-store' });
+  const buf = await r.arrayBuffer();
+  return iconv.decode(Buffer.from(buf), 'win1251');
+}
+
+async function getPostCount(uid) {
+  const html = await fetchDecoded(`${FORUM_BASE}/profile.php?id=${uid}`);
+  const m = html.match(/id="pa-posts"[\s\S]{0,200}?(\d+)/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+async function getBracketNumber(url) {
+  const html = await fetchDecoded(url);
+  const m = html.match(/\[([+\-]?\d+)\]/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+function creditFromMilestone(current, milestone, ratePerGroup) {
+  if (current <= milestone) return { newMilestone: milestone, add: 0 };
+  const steps = Math.floor((current - milestone) / GROUP_SIZE);
+  if (steps <= 0) return { newMilestone: milestone, add: 0 };
+  return { newMilestone: milestone + steps * GROUP_SIZE, add: steps * ratePerGroup };
+}
+
+module.exports = async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'method not allowed' });
+    return;
+  }
+
+  const { user_id, secret } = req.body || {};
+  if (secret !== WEBHOOK_SECRET) {
+    res.status(401).json({ error: 'bad secret' });
+    return;
+  }
+  if (!user_id) {
+    res.status(400).json({ error: 'user_id required' });
+    return;
+  }
+
+  const uid = Number(user_id);
+
+  const [posts, respect, positive] = await Promise.all([
+    getPostCount(uid),
+    getBracketNumber(`${FORUM_BASE}/respect.php?id=${uid}`),
+    getBracketNumber(`${FORUM_BASE}/positive.php?id=${uid}`)
+  ]);
+
+  let { data: row } = await supabase
+    .from('users')
+    .select('*')
+    .eq('profile_id', uid)
+    .maybeSingle();
+
+  if (!row) {
+    row = {
+      profile_id: uid,
+      money: 0,
+      posts_milestone: 0,
+      respect_milestone: 0,
+      positive_milestone: 0,
+      ads_milestone: 0,
+      game_milestone: 0
+    };
+  }
+
+  const postsResult    = creditFromMilestone(posts,    row.posts_milestone    || 0, RATE_PER_GROUP_POSTS);
+  const respectResult  = creditFromMilestone(respect,  row.respect_milestone  || 0, RATE_PER_GROUP_RESPECT);
+  const positiveResult = creditFromMilestone(positive, row.positive_milestone || 0, RATE_PER_GROUP_POSITIVE);
+
+  const totalAdd = postsResult.add + respectResult.add + positiveResult.add;
+  const newMoney = (row.money || 0) + totalAdd;
+
+  const { error } = await supabase
+    .from('users')
+    .upsert({
+      profile_id: uid,
+      money: newMoney,
+      posts_milestone: postsResult.newMilestone,
+      respect_milestone: respectResult.newMilestone,
+      positive_milestone: positiveResult.newMilestone,
+      ads_milestone: row.ads_milestone || 0,
+      game_milestone: row.game_milestone || 0
+    });
+
+  if (error) {
+    res.status(500).json({ error: error.message });
+    return;
+  }
+
+  res.status(200).json({
+    ok: true,
+    posts, respect, positive,
+    added: totalAdd,
+    money: newMoney
+  });
+};
